@@ -303,17 +303,17 @@ def convert_to_hf(model_path, input_base_path, model_size, tokenizer_path):
 def load_args_from_checkpoint(args):
 
     # Read Llama args.
-    model_args_path = os.path.join(args.load, "config.json")
-    with open(model_args_path) as f:
-        model_args = json.load(f)
+    llama_args_path = os.path.join(args.load, "config.json")
+    with open(llama_args_path) as f:
+        llama_args = json.load(f)
     # Update Megatron args.
-    args.seq_length = 4096
-    args.max_position_embeddings = model_args["max_position_embeddings"]
-    args.hidden_size = model_args["hidden_size"]
-    args.num_attention_heads = model_args["num_attention_heads"]
-    args.num_layers = model_args["num_hidden_layers"]
+    args.seq_length = llama_args["max_position_embeddings"]
+    args.max_position_embeddings = llama_args["max_position_embeddings"]
+    args.hidden_size = llama_args["hidden_size"]
+    args.num_attention_heads = llama_args["num_attention_heads"]
+    args.num_layers = llama_args["num_hidden_layers"]
     args.global_batch_size = 1024
-    args.norm_epsilon = model_args["rms_norm_eps"]
+    args.norm_epsilon = llama_args["rms_norm_eps"]
     args.iteration = 1 # '0', 'release' don't work
     args.add_position_embedding = False
     args.use_rotary_position_embeddings = True
@@ -321,13 +321,13 @@ def load_args_from_checkpoint(args):
     args.normalization = "RMSNorm"
     args.add_bias_linear = False
     args.untie_embeddings_and_output_weights = True
-    args.vocab_size = model_args["vocab_size"]
-    args.padded_vocab_size = model_args["vocab_size"]
-    args.ffn_hidden_size = model_args["intermediate_size"]
+    args.vocab_size = llama_args["vocab_size"]
+    args.padded_vocab_size = llama_args["vocab_size"]
+    args.ffn_hidden_size = llama_args["intermediate_size"]
 
-    if "num_key_value_heads" in model_args:
+    if "num_key_value_heads" in llama_args:
         args.group_query_attention = True
-        args.num_query_groups = model_args["num_key_value_heads"]
+        args.num_query_groups = llama_args["num_key_value_heads"]
 
 
 def set_preprocess_state(args, model, hf_model):
@@ -554,15 +554,18 @@ def _load_checkpoint(queue, args):
     margs.model_size = args.model_size
 
     # Get true (non-padded) vocab size
-    if margs.tokenizer_model is not None and "llama3" in args.model_size:
-        try:
-            from llama.tokenizer import Tokenizer as Llama3Tokenizer
-        except ImportError:
-            raise AssertionError("Module 'llama' is required but not installed.")
-        tokenizer = Llama3Tokenizer(margs.tokenizer_model)
-        md.true_vocab_size = tokenizer.vocab_size
-    else:
-        md.true_vocab_size = None
+    # if margs.tokenizer_model is not None and "llama3" in args.model_size:
+    #     try:
+    #         from llama.tokenizer import Tokenizer as Llama3Tokenizer
+    #     except ImportError:
+    #         raise AssertionError("Module 'llama' is required but not installed.")
+    #     tokenizer = Llama3Tokenizer(margs.tokenizer_model)
+    #     md.true_vocab_size = tokenizer.vocab_size # AttributeError: 'Tokenizer' object has no attribute 'vocab_size'
+    # else:
+    #     md.true_vocab_size = None
+        
+    md.true_vocab_size = args.true_vocab_size # 128256 for llama 3
+    
 
     # Get first pipe stage.
     mpu.set_tensor_model_parallel_rank(0)
