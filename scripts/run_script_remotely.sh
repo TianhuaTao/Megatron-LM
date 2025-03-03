@@ -16,7 +16,7 @@
 
 WORKSPACE_DIR=/workspace
 HOSTFILE=${1:-"${WORKSPACE_DIR}/hostfile-4x8xA"}       # Default to "hosts.txt" if not provided
-REMOTEPATH=${2:-"${WORKSPACE_DIR}/Megatron-LM/scripts/debug_core_big_dev-ref-120b-token-cosine.sh"}   # Default to "script.sh" if not provided
+REMOTEPATH=${2:-"${WORKSPACE_DIR}/Megatron-LM/scripts/debug_core_dense_dev-ref-120b-token-cosine.sh"}   # Default to "script.sh" if not provided
 
 # print the hostfile and remote script path
 echo "HOSTFILE: $HOSTFILE"

@@ -88,15 +88,15 @@ DATA_CACHE_DIR="${WORKSPACE_DIR}/data/ai2-llm/megatron/cache"
 MICRO_BATCH_SIZE=4
 GLOBAL_BATCH_SIZE=1024
 
-TP_SIZE=2
-PP_SIZE=4
-EP_PARALLEL_SIZE=2
-NUM_EXPERT=8
-TOPK=2
+TP_SIZE=1
+PP_SIZE=1
+EP_PARALLEL_SIZE=1
+NUM_EXPERT=1
+TOPK=1
 TOTAL_LEN=4096
 
-NHIDDEN=4096
-FFN_HIDDEN=14336
+NHIDDEN=2048
+FFN_HIDDEN=4096
 NLAYERS=32
 NHEADS=32
 LRMAX=2e-4
@@ -124,9 +124,13 @@ EXP_NAME="meg_${ACTIVE_PARAM}B-${SPARSE_PARAM}B_${NLAYERS}L_${NUM_EXPERT}N_${TOP
 
 # _${NUM_NODES}NODE
 
+USE_FP8=1
+if [ $USE_FP8 -eq 1 ]; then
+        TAG="debug-fp8"
+else
+        TAG="debug-bf16"
+fi
 
-
-TAG="debug-bf16"
 # 
 
 # if "TAG" is set and not empty, add it to the EXP_NAME
@@ -185,7 +189,7 @@ MLC=0.01
 
 
 
-SAVE_INTERVAL=100
+SAVE_INTERVAL=1000
 # SAVE_TMP_INTERVAL=10
 EVAL_INTERVAL=100
 
@@ -270,11 +274,16 @@ LM_ARGS="
        --hidden-dropout 0 \
        --apply-layernorm-1p "
 
-# LM_ARGS="$LM_ARGS --fp8-format hybrid --fp8-margin 0 --fp8-amax-history-len 1024 --fp8-amax-compute-algo max "
-
-if [ $PP_SIZE -gt 1 ]; then
-        LM_ARGS="$LM_ARGS --num-layers-per-virtual-pipeline-stage 2 --overlap-p2p-communication-warmup-flush"
+if [ $USE_FP8 -eq 1 ]; then
+        LM_ARGS="$LM_ARGS --fp8-format hybrid --fp8-margin 0 --fp8-amax-history-len 1024 --fp8-amax-compute-algo max "
 fi
+
+
+# if [ $PP_SIZE -gt 1 ]; then
+#         LM_ARGS="$LM_ARGS --num-layers-per-virtual-pipeline-stage 2 --overlap-p2p-communication-warmup-flush"
+# fi
+
+
 
 #        --overlap-param-gather-with-optimizer-step \
     #    --vocab-file $VOCAB \
@@ -282,7 +291,10 @@ fi
 # enable --sequence-parallel if TP_SIZE > 1
 if [ $TP_SIZE -gt 1 ]; then
         LM_ARGS="$LM_ARGS --sequence-parallel"
+        LM_ARGS="$LM_ARGS --tp-comm-overlap"
 fi
+
+
 
 
 # LM_ARGS="$LM_ARGS \
@@ -300,21 +312,24 @@ fi
 #        --recompute-activations \
 
 
+MoE_ARGS=" "
+# MoE_ARGS=" \
+#         --num-experts ${NUM_EXPERT} \
+#         --moe-aux-loss-coeff ${MLC} \
+#         --moe-layer-freq 1 \
+#         --moe-router-topk ${TOPK} \
+#         --expert-model-parallel-size ${EP_PARALLEL_SIZE} \
+#         --moe-z-loss-coeff 1e-3 \
+#         --moe-per-layer-logging \
+#         --moe-token-dispatcher-type alltoall \
+#         --moe-grouped-gemm \
+#         --moe-layer-recompute \
+#         --recompute-granularity full \
+#         --recompute-num-layers 1 \
+#         --recompute-method uniform \
+#         --moe-router-load-balancing-type aux_loss "
 
-MoE_ARGS=" \
-        --num-experts ${NUM_EXPERT} \
-        --moe-aux-loss-coeff ${MLC} \
-        --moe-layer-freq 1 \
-        --moe-router-topk ${TOPK} \
-        --expert-model-parallel-size ${EP_PARALLEL_SIZE} \
-        --moe-z-loss-coeff 1e-3 \
-        --moe-per-layer-logging \
-        --moe-token-dispatcher-type alltoall \
-        --moe-grouped-gemm \
-        --moe-permute-fusion \
-        --moe-layer-recompute \
-        --moe-router-load-balancing-type aux_loss "
-
+        # --moe-permute-fusion \
        
         # --recompute-num-layers 1 \
         # --recompute-method uniform \
@@ -337,13 +352,14 @@ gpt_options=" \
        --distributed-backend nccl \
        --init-method-std 0.01 \
        --bf16 \
-       --accumulate-allreduce-grads-in-fp32 \
        --use-flash-attn \
        $OPTIMIZER_ARGS \
        $OUTPUT_ARGS \
        $RESUME_ARGS \
        $MoE_ARGS 
 "
+
+#        --accumulate-allreduce-grads-in-fp32 \
 
 #        --train-data-path $TRAIN_DATA \
 #        --valid-data-path $VALID_DATA \

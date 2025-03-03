@@ -52,34 +52,35 @@ OTHER_OPTIONS="OMP_NUM_THREADS=8 NVTE_FLASH_ATTN=1 NVTE_FUSED_ATTN=1 NVTE_ALLOW_
 #         0.186 ${WORKSPACE_DIR}/data/core/megatron/colab_m_v2.1_text_document
 #         "
 
-TRAIN_DATA=" \
-        0.25 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-000-00000.npy_text_document \
-        0.25 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-003-00004.npy_text_document \
-        0.25 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-132-00002.npy_text_document \
-        0.25 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-179-00004.npy_text_document
-        "
+# TRAIN_DATA=" \
+#         0.25 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-000-00000.npy_text_document \
+#         0.25 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-003-00004.npy_text_document \
+#         0.25 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-132-00002.npy_text_document \
+#         0.25 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-179-00004.npy_text_document
+#         "
 
-VALID_DATA=" \
-        1.0 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-186-00001.npy_text_document 
-        "
+# VALID_DATA=" \
+#         1.0 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-186-00001.npy_text_document 
+#         "
 
-TEST_DATA=" \
-        1.0 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-187-00004.npy_text_document 
-        "
+# TEST_DATA=" \
+#         1.0 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-187-00004.npy_text_document 
+#         "
 
-
+DATA_ARGS_PATH="/workspace/data/ai2-llm/megatron/merged/data_args.json"
+S3_CACHE_PATH=/workspace/data/ai2-llm/megatron/s3_cache
 
 
 # VOCAB=/workspace/data/core/vocab.json
 DATA_CACHE_DIR="${WORKSPACE_DIR}/data/ai2-llm/megatron/cache"
 
 
-MICRO_BATCH_SIZE=8
+MICRO_BATCH_SIZE=2
 GLOBAL_BATCH_SIZE=1024
 
 TP_SIZE=1
-PP_SIZE=4
-EP_PARALLEL_SIZE=4
+PP_SIZE=1
+EP_PARALLEL_SIZE=1
 NUM_EXPERT=64
 TOPK=8
 TOTAL_LEN=4096
@@ -254,8 +255,6 @@ LM_ARGS="
        --tokenizer-model allenai/dolma2-tokenizer
        --untie-embeddings-and-output-weights \
        --overlap-grad-reduce \
-       --num-layers-per-virtual-pipeline-stage 2 \
-       --overlap-p2p-communication-warmup-flush \
        --overlap-param-gather \
        --use-distributed-optimizer \
        --normalization RMSNorm \
@@ -265,6 +264,9 @@ LM_ARGS="
 
 #        --overlap-param-gather-with-optimizer-step \
     #    --vocab-file $VOCAB \
+
+#        --num-layers-per-virtual-pipeline-stage 2 \
+#        --overlap-p2p-communication-warmup-flush \
 
 # enable --sequence-parallel if TP_SIZE > 1
 if [ $TP_SIZE -gt 1 ]; then
@@ -297,13 +299,13 @@ MoE_ARGS=" \
         --moe-z-loss-coeff 1e-3 \
         --moe-per-layer-logging \
         --moe-token-dispatcher-type alltoall \
-        --moe-layer-recompute \
+        --moe-grouped-gemm \
         --moe-router-load-balancing-type aux_loss "
 
+        # --moe-layer-recompute \
         # --recompute-num-layers 1 \
         # --recompute-method uniform \
         # --recompute-granularity full \
-        # --moe-grouped-gemm \
 
 gpt_options=" \
        $LM_ARGS \
@@ -313,9 +315,8 @@ gpt_options=" \
        --seq-length $SEQ_LEN \
        --max-position-embeddings $SEQ_LEN \
        --num-workers 1 \
-       --train-data-path $TRAIN_DATA \
-       --valid-data-path $VALID_DATA \
-       --test-data-path $TEST_DATA \
+       --per-split-data-args-path $DATA_ARGS_PATH \
+       --s3-cache-path $S3_CACHE_PATH \
        --num-dataset-builder-threads 32 \
        --data-cache-path $DATA_CACHE_DIR \
        --save $CHECKPOINT_PATH \
@@ -323,6 +324,7 @@ gpt_options=" \
        --distributed-backend nccl \
        --init-method-std 0.01 \
        --bf16 \
+       --empty-unused-memory-level 1 \
        --accumulate-allreduce-grads-in-fp32 \
        --use-flash-attn \
        $OPTIMIZER_ARGS \
@@ -334,7 +336,9 @@ gpt_options=" \
 #        --split 978,20,2 \
 
 #        --attention-softmax-in-fp32 \
-
+#        --train-data-path $TRAIN_DATA \
+#        --valid-data-path $VALID_DATA \
+#        --test-data-path $TEST_DATA \
 
 ### ds_config for FP16
 mkdir -p ${ARTIFACTS_RUN_DIR}
