@@ -41,43 +41,10 @@ OTHER_OPTIONS="OMP_NUM_THREADS=8 NVTE_FLASH_ATTN=1 NVTE_FUSED_ATTN=1 NVTE_ALLOW_
 # NVTE_DEBUG=1 NVTE_DEBUG_LEVEL=0 
 # NVTE_DEBUG=1 NVTE_DEBUG_LEVEL=2
 
- 
 
-
-# new data TODO: check weights and path
-# DATA_PATH=" \
-#         0.252 ${WORKSPACE_DIR}/data/core/megatron/Uniref_90_Rep_text_document \
-#         0.150 ${WORKSPACE_DIR}/data/core/megatron/colab_c_v2.1.sample_text_document \
-#         0.412 ${WORKSPACE_DIR}/data/core/megatron/colabfold_v2.0_dupur90v2cfv1_text_document \
-#         0.186 ${WORKSPACE_DIR}/data/core/megatron/colab_m_v2.1_text_document
-#         "
 
 DATA_ARGS_PATH="/workspace/data/ai2-llm/megatron/merged/data_args.json"
 S3_CACHE_PATH=/workspace/data/ai2-llm/megatron/s3_cache
-# TRAIN_DATA=" \
-        # 787723421888 /workspace/data/ai2-llm/megatron/merged/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/merged.000 \
-        # 780852340896 /workspace/data/ai2-llm/megatron/merged/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/merged.010 \
-        # 779435402924 /workspace/data/ai2-llm/megatron/merged/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/merged.020 \
-        # 787881030316 /workspace/data/ai2-llm/megatron/merged/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/merged.030 \
-        # 786659499236 /workspace/data/ai2-llm/megatron/merged/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/merged.040 \
-        # 234209844748 /workspace/data/ai2-llm/megatron/merged/pes2o/allenai/dolma2-tokenizer/merged
-        # 47275821316 /workspace/data/ai2-llm/megatron/merged/proof-pile-2/v0_decontaminated/algebraic-stack/train/allenai/dolma2-tokenizer/merged
-        # 83095387384 /workspace/data/ai2-llm/megatron/merged/proof-pile-2/v0_decontaminated/arxiv/train/allenai/dolma2-tokenizer/merged
-        # 48741419736 /workspace/data/ai2-llm/megatron/merged/proof-pile-2/v0_decontaminated/open-web-math/train/allenai/dolma2-tokenizer/merged
-        # 332168588140 /workspace/data/ai2-llm/megatron/merged/starcoder/v1-decon-100_to_20k-2star-top_token_030/allenai/dolma2-tokenizer/merged
-#         "
-
-# for debugging
-# VALID_DATA=$TRAIN_DATA
-# TEST_DATA=$TRAIN_DATA
-# VALID_DATA=" \
-#         1.0 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-186-00001.npy_text_document 
-#         "
-
-# TEST_DATA=" \
-#         1.0 ${WORKSPACE_DIR}/data/ai2-llm/megatron/dclm/text_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train/allenai/dolma2-tokenizer/part-187-00004.npy_text_document 
-#         "
-
 
 
 
@@ -85,18 +52,19 @@ S3_CACHE_PATH=/workspace/data/ai2-llm/megatron/s3_cache
 DATA_CACHE_DIR="${WORKSPACE_DIR}/data/ai2-llm/megatron/cache"
 
 
-MICRO_BATCH_SIZE=2
+MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=1024
 
-TP_SIZE=2
+TP_SIZE=1
 PP_SIZE=4
-EP_PARALLEL_SIZE=4
+EP_PARALLEL_SIZE=8
 NUM_EXPERT=64
-TOPK=8
+TOPK=2
 TOTAL_LEN=4096
 
-# NHIDDEN=4096
-# FFN_HIDDEN=16384
+SHARED_EXP=1
+SHARED_EXP_FFN=8192
+
 NHIDDEN=4096
 FFN_HIDDEN=2048
 NLAYERS=32
@@ -113,23 +81,30 @@ VOCAB_SIZE=100278
 EMBED_PARAM=$(echo "scale=3; 2 * ${NHIDDEN} * ${VOCAB_SIZE} / 1000000000" | bc | awk '{printf "%.3f\n", $0}')
 echo "EMBED_PARAM: ${EMBED_PARAM}B"
 
-SPARSE_PARAM_NO_EMBED=$(echo "scale=3; ${NLAYERS} * (4 * ${NHIDDEN} * ${NHIDDEN} + 3 * ${NUM_EXPERT} * ${NHIDDEN} * ${FFN_HIDDEN}) / 1000000000" | bc)
-SPARSE_PARAM=$(echo "scale=1; (${SPARSE_PARAM_NO_EMBED} + ${EMBED_PARAM})/1" | bc)
+SPARSE_PARAM_NO_EMBED=$(echo "scale=3; ${NLAYERS} * (4 * ${NHIDDEN} * ${NHIDDEN} + 3 * (${NUM_EXPERT} * ${NHIDDEN} * ${FFN_HIDDEN} + ${SHARED_EXP} * ${NHIDDEN} * ${SHARED_EXP_FFN}) ) / 1000000000" | bc)
+SPARSE_PARAM=$(echo "scale=3; (${SPARSE_PARAM_NO_EMBED} + ${EMBED_PARAM})/1" | bc | awk '{printf "%.2f\n", $0}')
 echo "SPARSE_PARAM: ${SPARSE_PARAM}B"
 
-ACTIVE_PARAM_NO_EMBED=$(echo "scale=3; ${NLAYERS} * (4 * ${NHIDDEN} * ${NHIDDEN} + 3 * ${TOPK} * ${NHIDDEN} * ${FFN_HIDDEN}) / 1000000000" | bc)
-ACTIVE_PARAM=$(echo "scale=1; (${ACTIVE_PARAM_NO_EMBED} + ${EMBED_PARAM})/1" | bc)
+ACTIVE_PARAM_NO_EMBED=$(echo "scale=3; ${NLAYERS} * (4 * ${NHIDDEN} * ${NHIDDEN} + 3 * (${TOPK} * ${NHIDDEN} * ${FFN_HIDDEN} + ${SHARED_EXP} * ${NHIDDEN} * ${SHARED_EXP_FFN} ) ) / 1000000000" | bc)
+ACTIVE_PARAM=$(echo "scale=3; (${ACTIVE_PARAM_NO_EMBED} + ${EMBED_PARAM})/1" | bc | awk '{printf "%.2f\n", $0}')
 echo "ACTIVE_PARAM: ${ACTIVE_PARAM}B"
 
 
-EXP_NAME="meg_${ACTIVE_PARAM}B-${SPARSE_PARAM}B_${NLAYERS}L_${NUM_EXPERT}N_${TOPK}K_${NHIDDEN}DIM_${FFN_HIDDEN}FFN_${NHEADS}H_${TOTAL_LEN}L_${GLOBAL_BATCH_SIZE}GBS_${MICRO_BATCH_SIZE}MBS_${LR_WARMUP_STEPS}WA_${TP_SIZE}TP_${PP_SIZE}PP_${EP_PARALLEL_SIZE}EP"
+EXP_NAME="meg_${ACTIVE_PARAM}B-${SPARSE_PARAM}B_${NLAYERS}L"
 
+if [ $SHARED_EXP -eq 0 ]; then
+        EXP_NAME="${EXP_NAME}_${NUM_EXPERT}N${TOPK}K_${NHIDDEN}H-${FFN_HIDDEN}F"
+else
+        EXP_NAME="${EXP_NAME}_${NUM_EXPERT}N${SHARED_EXP}S${TOPK}K_${NHIDDEN}H-${FFN_HIDDEN}F-${SHARED_EXP_FFN}S"
+fi
+EXP_NAME="${EXP_NAME}_${NHEADS}H_${TOTAL_LEN}L_${GLOBAL_BATCH_SIZE}B${MICRO_BATCH_SIZE}M_${LR_WARMUP_STEPS}WA_${TP_SIZE}TP${PP_SIZE}PP${EP_PARALLEL_SIZE}EP"
 # _${NUM_NODES}NODE
 
-USE_FP8=1
+USE_FP8=0
 USE_PROFILE=0
+CAPACITY_FACTOR=1.25
 
-TAG="debug"
+TAG="debug-rc-cap${CAPACITY_FACTOR}"
 
 if [ $USE_FP8 -eq 1 ]; then
         TAG="$TAG-fp8"
@@ -145,6 +120,7 @@ fi
 if [ -n "${TAG}" ]; then
     EXP_NAME="${EXP_NAME}-${TAG}"
 fi
+echo "EXP_NAME: ${EXP_NAME}"
 
 INIT_DIR="" # for finetune over a pre-trained model
 
@@ -283,7 +259,7 @@ LM_ARGS="
        --apply-layernorm-1p "
 
 if [ $USE_FP8 -eq 1 ]; then
-        LM_ARGS="$LM_ARGS --fp8-format hybrid --fp8-margin 0 --fp8-amax-history-len 1024 --fp8-amax-compute-algo max "
+        LM_ARGS="$LM_ARGS --fp8-format hybrid --fp8-margin 0 --fp8-amax-history-len 1024 --fp8-amax-compute-algo max"
 fi
 
 if [ $USE_PROFILE -eq 1 ]; then
@@ -293,7 +269,7 @@ fi
 
 # --num-layers-per-virtual-pipeline-stage 2
 if [ $PP_SIZE -gt 1 ]; then
-        LM_ARGS="$LM_ARGS --num-virtual-stages-per-pipeline-rank 4 --overlap-p2p-communication-warmup-flush"
+        LM_ARGS="$LM_ARGS --num-virtual-stages-per-pipeline-rank 2 --overlap-p2p-communication-warmup-flush"
 fi
 #  --account-for-embedding-in-pipeline-split
 
@@ -334,7 +310,19 @@ else
         --moe-grouped-gemm \
         --moe-layer-recompute \
         --moe-router-load-balancing-type aux_loss "
+
+
+        if [ $SHARED_EXP -gt 0 ]; then  # using shared experts
+                MoE_ARGS="$MoE_ARGS --moe-shared-expert-intermediate-size ${SHARED_EXP_FFN} --moe-shared-expert-overlap --moe-expert-capacity-factor ${CAPACITY_FACTOR}"
+        fi
+
+        #  --moe-pad-expert-input-to-capacity
+
 fi
+
+        #  \
+        # --moe-enable-deepep \
+        # --moe-token-dispatcher-type flex \
        
         # --moe-permute-fusion \
 

@@ -464,7 +464,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
                 -1, self.num_local_experts
             )
             if not self.config.moe_permute_fusion:
-                self.num_global_tokens_per_local_expert = num_global_tokens_per_local_expert.to(
+                self.num_global_tokens_per_local_expert = self.num_global_tokens_per_local_expert.to( # TODO: BUG? -> change to self.xxx
                     torch.device("cpu"), non_blocking=False
                 )
 
@@ -641,6 +641,8 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
         # Add shared experts output
         if self.shared_experts is not None:
             shared_expert_output = self.shared_experts.get_output()
+            # print("shared_expert_output", shared_expert_output.shape)
+            # print("output", output.shape)
             output += shared_expert_output
         return output, None
 
