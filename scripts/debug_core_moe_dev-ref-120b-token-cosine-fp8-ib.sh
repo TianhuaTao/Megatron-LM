@@ -43,13 +43,13 @@ export WANDB_API_KEY=61753d825c2bec08062290674ce9e3585bf31db3
 
 cd ${WORKSPACE_DIR}/Megatron-LM
 
-# OPTIONS_NCCL="NCCL_DEBUG=VERSION NCCL_IB_DISABLE=0 NCCL_NET_GDR_LEVEL=2"
 OPTIONS_NCCL="CUDA_LAUNCH_BLOCKING=0"
 # OPTIONS_NCCL="$OPTIONS_NCCL TORCH_CPP_LOG_LEVEL=INFO"
 # OPTIONS_NCCL="$OPTIONS_NCCL TORCH_DISTRIBUTED_DEBUG=INFO"
-OPTIONS_NCCL="$OPTIONS_NCCL NCCL_DEBUG=VERSION"
-OPTIONS_NCCL="$OPTIONS_NCCL NCCL_DEBUG_SUBSYS=INIT,NET"
+OPTIONS_NCCL="$OPTIONS_NCCL NCCL_DEBUG=INFO"
+OPTIONS_NCCL="$OPTIONS_NCCL NCCL_DEBUG_SUBSYS=NET"
 OPTIONS_NCCL="$OPTIONS_NCCL CUDA_DEVICE_MAX_CONNECTIONS=1"
+OPTIONS_NCCL="$OPTIONS_NCCL NCCL_NET_GDR_LEVEL=SYS"
 
 OTHER_OPTIONS="OMP_NUM_THREADS=8 NVTE_FLASH_ATTN=1 NVTE_FUSED_ATTN=1 NVTE_ALLOW_NONDETERMINISTIC_ALGO=1"
 # NVTE_FLASH_ATTN=1
@@ -59,7 +59,7 @@ OTHER_OPTIONS="OMP_NUM_THREADS=8 NVTE_FLASH_ATTN=1 NVTE_FUSED_ATTN=1 NVTE_ALLOW_
 
 
 
-DATA_ARGS_PATH="/workspace/data/ai2-llm/megatron/merged/data_args.json"
+DATA_ARGS_PATH="/workspace/data/ai2-llm/megatron/data_args-debug.json"
 S3_CACHE_PATH=/workspace/data/ai2-llm/megatron/s3_cache
 
 
@@ -68,8 +68,8 @@ S3_CACHE_PATH=/workspace/data/ai2-llm/megatron/s3_cache
 DATA_CACHE_DIR="${WORKSPACE_DIR}/data/ai2-llm/megatron/cache"
 
 
-MICRO_BATCH_SIZE=1
-GLOBAL_BATCH_SIZE=1024
+MICRO_BATCH_SIZE=4
+GLOBAL_BATCH_SIZE=4096
 
 TP_SIZE=1
 PP_SIZE=4
@@ -120,7 +120,7 @@ USE_FP8=0
 USE_PROFILE=0
 CAPACITY_FACTOR=1.25
 
-TAG="debug-rc-cap${CAPACITY_FACTOR}"
+TAG="debug-rc-cap${CAPACITY_FACTOR}-ib"
 
 if [ $USE_FP8 -eq 1 ]; then
         TAG="$TAG-fp8"
@@ -266,13 +266,15 @@ LM_ARGS="
        --tokenizer-type HuggingFaceTokenizer \
        --tokenizer-model allenai/dolma2-tokenizer
        --untie-embeddings-and-output-weights \
-       --overlap-grad-reduce \
-       --overlap-param-gather \
        --use-distributed-optimizer \
        --normalization RMSNorm \
        --attention-dropout 0  \
        --hidden-dropout 0 \
        --apply-layernorm-1p "
+
+
+LM_ARGS="$LM_ARGS --overlap-grad-reduce --overlap-param-gather" # container 25.02 bug? does not work with overlap?
+# LM_ARGS="$LM_ARGS --no-gradient-accumulation-fusion" # container 25.02 bug too
 
 if [ $USE_FP8 -eq 1 ]; then
         LM_ARGS="$LM_ARGS --fp8-format hybrid --fp8-margin 0 --fp8-amax-history-len 1024 --fp8-amax-compute-algo max"
@@ -290,8 +292,6 @@ fi
 #  --account-for-embedding-in-pipeline-split
 
 
-#        --overlap-param-gather-with-optimizer-step \
-    #    --vocab-file $VOCAB \
 
 # enable --sequence-parallel if TP_SIZE > 1
 if [ $TP_SIZE -gt 1 ]; then
@@ -307,8 +307,8 @@ fi
 #         "
 
 #        --overlap-param-gather-with-optimizer-step \
-#        --use-distributed-optimizer \
-#        --overlap-param-gather \
+
+
 
 
 if [ $NUM_EXPERT -eq 1 ]; then
@@ -324,17 +324,17 @@ else
         --moe-per-layer-logging \
         --moe-token-dispatcher-type alltoall \
         --moe-grouped-gemm \
-        --moe-layer-recompute \
         --moe-router-load-balancing-type aux_loss "
 
 
         if [ $SHARED_EXP -gt 0 ]; then  # using shared experts
                 MoE_ARGS="$MoE_ARGS --moe-shared-expert-intermediate-size ${SHARED_EXP_FFN} --moe-shared-expert-overlap --moe-expert-capacity-factor ${CAPACITY_FACTOR}"
         fi
-
-        #  --moe-pad-expert-input-to-capacity
-
 fi
+        # --moe-layer-recompute \
+
+        # --moe-pad-expert-input-to-capacity \
+
 
         #  \
         # --moe-enable-deepep \
@@ -342,10 +342,10 @@ fi
        
         # --moe-permute-fusion \
 
-# LM_ARGS="$LM_ARGS \
-#         --recompute-num-layers 1 \
-#         --recompute-method uniform \
-#         --recompute-granularity full "
+LM_ARGS="$LM_ARGS \
+        --recompute-num-layers 1 \
+        --recompute-method uniform \
+        --recompute-granularity full "
 
 gpt_options=" \
        $LM_ARGS \
@@ -371,23 +371,14 @@ gpt_options=" \
        $MoE_ARGS 
 "
 
-#        --accumulate-allreduce-grads-in-fp32 \
 
-#        --train-data-path $TRAIN_DATA \
-#        --valid-data-path $VALID_DATA \
-#        --test-data-path $TEST_DATA \
-
-# --data-path $DATA_PATH \
-#        --split 978,20,2 \
-
-#        --attention-softmax-in-fp32 \
 
 
 ### ds_config for FP16
 mkdir -p ${ARTIFACTS_RUN_DIR}
 
 
-port=4759
+port=24759
 
 NODE0=$(head -n 1 "$HOST_FILE_PATH" | awk '{print $1}')
 
@@ -407,9 +398,9 @@ if [ $USE_PROFILE -eq 1 ]; then
         --force-overwrite true \
         --trace-fork-before-exec='true' \
         -o megatron_profile_${SLURM_NODEID} \
-        torchrun --rdzv_endpoint $NODE0:$port --rdzv_id 10086 --rdzv_backend c10d --nnodes ${NUM_NODES} --nproc-per-node ${NUM_GPUS_PER_WORKER} --node_rank "${SLURM_NODEID}" ${script_path} ${gpt_options}"
+        torchrun --rdzv_endpoint $NODE0:$port --rdzv_id 20086 --rdzv_backend c10d --nnodes ${NUM_NODES} --nproc-per-node ${NUM_GPUS_PER_WORKER} --node_rank "${SLURM_NODEID}" ${script_path} ${gpt_options}"
 else
-        run_cmd="${OPTIONS_NCCL} ${OTHER_OPTIONS} torchrun --rdzv_endpoint $NODE0:$port --rdzv_id 10086 --rdzv_backend c10d --nnodes ${NUM_NODES} --nproc-per-node ${NUM_GPUS_PER_WORKER} --node_rank "${SLURM_NODEID}" ${script_path} ${gpt_options}"
+        run_cmd="${OPTIONS_NCCL} ${OTHER_OPTIONS} torchrun --rdzv_endpoint $NODE0:$port --rdzv_id 20086 --rdzv_backend c10d --nnodes ${NUM_NODES} --nproc-per-node ${NUM_GPUS_PER_WORKER} --node_rank "${SLURM_NODEID}" ${script_path} ${gpt_options}"
 fi
 
 

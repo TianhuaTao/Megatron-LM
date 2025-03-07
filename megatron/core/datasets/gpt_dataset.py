@@ -408,9 +408,11 @@ class GPTDataset(MegatronDataset):
             numpy_random_state = numpy.random.RandomState(self.config.random_seed)
 
             # Build the document index
+            print("building document index...")
             document_index = _build_document_index(
                 self.indices, num_epochs, numpy_random_state, separate_final_epoch
             )
+            print("built document index")
 
             drop_last_partial_sequence = True
             if self.index_split == Split.valid:
@@ -437,6 +439,7 @@ class GPTDataset(MegatronDataset):
                 sequence_lengths_for_cpp = self.dataset.sequence_lengths.copy()
             else:
                 sequence_lengths_for_cpp = self.dataset.sequence_lengths
+            print("building sample index...")
             sample_index = helpers.build_sample_idx(
                 sequence_lengths_for_cpp,
                 document_index,
@@ -446,7 +449,8 @@ class GPTDataset(MegatronDataset):
                 drop_last_partial_sequence,
                 self.config.add_extra_token_to_sequence,
             )
-
+            print("built sample index")
+            
             # Build the shuffle index
             if separate_final_epoch:
                 shuffle_index = _build_shuffle_index(
