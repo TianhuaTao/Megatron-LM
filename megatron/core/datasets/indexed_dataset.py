@@ -534,7 +534,8 @@ class IndexedDataset(torch.utils.data.Dataset):
 
         if is_s3_path(path_prefix) and s3_config is not None:
             idx_path = get_idx_path(path_prefix)
-            cache_idx_path = os.path.join(s3_config.path_to_idx_cache, os.path.basename(idx_path))
+            # cache_idx_path = os.path.join(s3_config.path_to_idx_cache, os.path.basename(idx_path)) # BUG: same basename for different paths?
+            cache_idx_path = os.path.join(s3_config.path_to_idx_cache, idx_path.replace("s3://", ""))
             maybe_download_file(idx_path, cache_idx_path)
 
         self.initialize(path_prefix, multimodal, mmap, s3_config)
