@@ -11,6 +11,9 @@ from megatron.core.fp8_utils import get_fp8_align_size
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer.cuda_graphs import is_graph_capturing
 from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core.process_groups_config import ModelCommProcessGroups
+from megatron.core.tensor_parallel.mappings import gather_from_sequence_parallel_region
+from megatron.core.jit import jit_fuser
 
 try:
     import transformer_engine as te  # pylint: disable=unused-import
@@ -116,6 +119,7 @@ def switch_load_balancing_loss_func(
     return aux_loss
 
 
+@jit_fuser
 def z_loss_func(logits, z_loss_coeff):
     """Encourages the router's logits to remain small to enhance stability.
     Please refer to the ST-MoE paper (https://arxiv.org/pdf/2202.08906.pdf) for details.
@@ -130,7 +134,7 @@ def z_loss_func(logits, z_loss_coeff):
     z_loss = torch.mean(torch.square(torch.logsumexp(logits, dim=-1))) * z_loss_coeff
     return z_loss
 
-
+@jit_fuser
 def sinkhorn(cost: torch.Tensor, tol: float = 0.0001):
     """Sinkhorn based MoE routing function"""
     cost = torch.exp(cost)

@@ -520,6 +520,11 @@ class _S3BinReader(_BinReader):
         assert offset >= bytes_start
         bytes_end = max(bytes_start + self._cache_nbytes, offset + size)
         assert bytes_end >= 1
+        # TODO: we should store the cached bytes, now the cache size is 256MB, but each data file is about 800 GB
+        # so it's unlikely that the next read will hit this cache again, and we will discard this downloaded data and download the new chunk again
+        # this is wasteful because usually we only read about thousands of tokens each time from a downloaded chunk, and throw away the rest.
+        
+        # this current code only works when it's read sequentially
         self._cache = self._client.get_object(
             Bucket=self._s3_bucket,
             Key=self._s3_key,

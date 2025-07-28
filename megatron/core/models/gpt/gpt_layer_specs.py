@@ -305,6 +305,104 @@ def get_gpt_layer_with_transformer_engine_spec(
         )
 
 
+def get_gpt_layer_with_transformer_engine_spec_custom_mask(
+    num_experts: Optional[int] = None,
+    moe_grouped_gemm: Optional[bool] = False,
+    qk_layernorm: Optional[bool] = False,
+    multi_latent_attention: Optional[bool] = False,
+    fp8: Optional[str] = None,  # pylint: disable=unused-arguments
+    moe_use_legacy_grouped_gemm: Optional[bool] = False,
+) -> ModuleSpec:
+    """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
+
+
+    Args:
+        num_experts (int, optional): Number of experts. Defaults to None.
+        moe_grouped_gemm (bool, optional): To use Grouped GEMM. Defaults to False.
+        qk_layernorm (bool, optional): To use layernorm for queries/keys. Defaults to False.
+        fp8 (str, optional): Deprecated. For temporary Nemo compatibility.
+        moe_use_legacy_grouped_gemm (bool, optional): Force use the legacy GroupedMLP.
+                                                      Defaults to False.
+
+    Returns:
+        ModuleSpec: Module specification with TE modules
+    """
+    if fp8 is not None:
+        warnings.warn(
+            'The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated'
+            ' and will be removed soon. Please update your code accordingly.'
+        )
+
+    mlp = get_mlp_module_spec(
+        use_te=True,
+        num_experts=num_experts,
+        moe_grouped_gemm=moe_grouped_gemm,
+        moe_use_legacy_grouped_gemm=moe_use_legacy_grouped_gemm,
+    )
+
+    if multi_latent_attention:
+        return ModuleSpec(
+            module=TransformerLayer,
+            submodules=TransformerLayerSubmodules(
+                input_layernorm=TENorm,
+                self_attention=ModuleSpec(
+                    module=MLASelfAttention,
+                    params={"attn_mask_type": AttnMaskType.padding},
+                    submodules=MLASelfAttentionSubmodules(
+                        linear_q_proj=TEColumnParallelLinear,
+                        linear_q_down_proj=TEColumnParallelLinear,
+                        linear_q_up_proj=(
+                            TELayerNormColumnParallelLinear
+                            if qk_layernorm
+                            else TEColumnParallelLinear
+                        ),
+                        linear_kv_down_proj=TEColumnParallelLinear,
+                        linear_kv_up_proj=(
+                            TELayerNormColumnParallelLinear
+                            if qk_layernorm
+                            else TEColumnParallelLinear
+                        ),
+                        core_attention=TEDotProductAttention,
+                        linear_proj=TERowParallelLinear,
+                        q_layernorm=IdentityOp,
+                        kv_layernorm=IdentityOp,
+                    ),
+                ),
+                self_attn_bda=get_bias_dropout_add,
+                pre_mlp_layernorm=TENorm if num_experts else IdentityOp,
+                mlp=mlp,
+                mlp_bda=get_bias_dropout_add,
+            ),
+        )
+    else:
+
+        # TENorm significantly harms convergence when used
+        # for QKLayerNorm if TE Version < 1.9;
+        # we instead use the Apex implementation.
+        qk_norm = TENorm if is_te_min_version("1.9.0") else FusedLayerNorm
+
+        return ModuleSpec(
+            module=TransformerLayer,
+            submodules=TransformerLayerSubmodules(
+                self_attention=ModuleSpec(
+                    module=SelfAttention,
+                    params={"attn_mask_type": AttnMaskType.padding},
+                    submodules=SelfAttentionSubmodules(
+                        linear_qkv=TELayerNormColumnParallelLinear,
+                        core_attention=TEDotProductAttention,
+                        linear_proj=TERowParallelLinear,
+                        q_layernorm=qk_norm if qk_layernorm else IdentityOp,
+                        k_layernorm=qk_norm if qk_layernorm else IdentityOp,
+                    ),
+                ),
+                self_attn_bda=get_bias_dropout_add,
+                pre_mlp_layernorm=TENorm if num_experts else IdentityOp,
+                mlp=mlp,
+                mlp_bda=get_bias_dropout_add,
+            ),
+        )
+        
+        
 def get_gpt_layer_local_spec(
     num_experts: Optional[int] = None,
     moe_grouped_gemm: Optional[bool] = False,

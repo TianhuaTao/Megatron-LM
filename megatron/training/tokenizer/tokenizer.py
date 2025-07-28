@@ -104,6 +104,12 @@ def build_tokenizer(args, **kwargs):
     elif args.tokenizer_type == 'NullMultimodalTokenizer':
         assert args.vocab_size is not None
         tokenizer = _NullMultimodalTokenizer(args.vocab_size)
+    elif args.tokenizer_type == "ProteinTokenizer":
+        from .protein_tokenizer import _ProteinTokenizer
+        tokenizer = _ProteinTokenizer(args)
+    elif args.tokenizer_type == "MultiLangBioTokenizer":
+        from .multi_lang_bio_tokenizer import _MultiLangBioTokenizer
+        tokenizer = _MultiLangBioTokenizer(args)
     else:
         raise NotImplementedError('{} tokenizer is not ' 'implemented.'.format(args.tokenizer_type))
 

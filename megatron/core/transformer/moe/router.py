@@ -22,7 +22,8 @@ from megatron.core.transformer.moe.moe_utils import (
     z_loss_func,
 )
 from megatron.core.transformer.transformer_config import TransformerConfig
-
+import nvtx
+NVTX_COLOR = "red"
 
 class Router(ABC, MegatronModule):
     """Base Router class"""
@@ -75,6 +76,7 @@ class Router(ABC, MegatronModule):
             self.bias.data = self.bias.data.to(dtype=self.config.params_dtype)
             setattr(self.bias, 'sequence_parallel', self.config.sequence_parallel)
 
+    @nvtx.annotate(color=NVTX_COLOR)
     def gating(self, input: torch.Tensor):
         """Forward pass of the router gate.
 

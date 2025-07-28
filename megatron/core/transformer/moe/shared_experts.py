@@ -25,8 +25,10 @@ from megatron.core.utils import (
     is_torch_min_version,
     make_sharded_tensor_for_checkpoint,
 )
+from megatron.core.utils import is_torch_min_version, make_sharded_tensor_for_checkpoint
+import nvtx
 
-
+NVTX_COLOR = "blue"
 class SharedExpertMLP(MLP):
     """
     MLP layer for Shared Experts.
@@ -151,6 +153,7 @@ class SharedExpertMLP(MLP):
             sharded_state_dict.update(sub_sd)
         return sharded_state_dict
 
+    @nvtx.annotate(color=NVTX_COLOR)
     def pre_forward_comm(self, input):
         """
         All Gather for SP before forward.
@@ -172,6 +175,7 @@ class SharedExpertMLP(MLP):
                 self.cached_fc1_input = copy_to_tensor_model_parallel_region(input)
             set_tensor_grad_fn_sequence_sr(self.cached_fc1_input, torch.iinfo(torch.int).max)
 
+    @nvtx.annotate(color=NVTX_COLOR)
     def linear_fc1_forward_and_act(self, overlapped_comm_output=None):
         """
         Do Linear FC1 and activation function forward.
@@ -223,6 +227,7 @@ class SharedExpertMLP(MLP):
 
             self.cached_fc2_input = intermediate_parallel
 
+    @nvtx.annotate(color=NVTX_COLOR)
     def linear_fc2_forward(self, overlapped_comm_output=None):
         """
         Do Linear FC2 forward.
@@ -238,6 +243,7 @@ class SharedExpertMLP(MLP):
             self.cached_fc2_output, _ = self.linear_fc2(self.cached_fc2_input)
             self.cached_fc2_input = None
 
+    @nvtx.annotate(color=NVTX_COLOR)
     def post_forward_comm(self):
         """
         Reduce scatter for SP after forward.

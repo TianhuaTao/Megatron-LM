@@ -45,6 +45,7 @@ from megatron.core.transformer.utils import (
     sharded_state_dict_default,
 )
 from megatron.core.utils import deprecated
+from megatron.core import parallel_state, tensor_parallel
 
 try:
     import transformer_engine as te  # pylint: disable=unused-import
@@ -58,6 +59,8 @@ except ImportError:
     HAVE_TE = False
 
 logger = logging.getLogger(__name__)
+import nvtx
+NVTX_COLOR="yellow"
 
 
 @deprecated(
@@ -651,6 +654,7 @@ class TEGroupedMLP(MegatronModule):
             .to(intermediate_parallel.dtype)
         )
 
+    @nvtx.annotate('TEGroupedMLP.forward', color=NVTX_COLOR)
     def forward(
         self,
         permuted_local_hidden_states: torch.Tensor,

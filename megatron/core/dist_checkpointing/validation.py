@@ -424,6 +424,8 @@ def validate_sharding_integrity(
     """
 
     if common_state_dict is not None:
+        # clear cache to avoid OOM
+        torch.cuda.empty_cache()
         _validate_common_state_dict(common_state_dict)
 
     if torch.distributed.get_rank() != 0:

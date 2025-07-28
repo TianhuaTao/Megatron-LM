@@ -746,7 +746,12 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
 
         # Final layer norm.
         if self.final_layernorm is not None:
-            hidden_states = self.final_layernorm(hidden_states)
+            if self.config.recompute_granularity == 'selective':
+                def custom_forward_final_norm(hidden_states):
+                    return self.final_layernorm(hidden_states)
+                tensor_parallel.checkpoint(custom_forward_final_norm, False, hidden_states)
+            else:
+                hidden_states = self.final_layernorm(hidden_states)
             # TENorm produces a "viewed" tensor. This will result in schedule.py's
             # deallocate_output_tensor() throwing an error, so a viewless tensor is
             # created to prevent this.

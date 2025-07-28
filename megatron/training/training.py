@@ -1282,6 +1282,15 @@ def setup_model_and_optimizer(
             and getattr(args, "use_torch_fsdp2", False)
             and args.ckpt_format == "torch_dist",
         )
+        # from contextlib import nullcontext
+        # from megatron.core.fp8_utils import get_fp8_context
+
+        # use_fp8_context = args.fp8 and args.fp8_recipe == 'delayed'
+        # fp8_context = get_fp8_context(model[0].config) if use_fp8_context else nullcontext() # TODO: hack
+        # with fp8_context:
+        #     args.iteration, args.num_floating_point_operations_so_far = load_checkpoint(
+        #             model, optimizer, opt_param_scheduler, checkpointing_context=checkpointing_context,
+        #             skip_load_to_model_and_opt=HAVE_FSDP2 and getattr(args, "use_torch_fsdp2", False) and args.ckpt_format == "torch_dist")
         timers('load-checkpoint').stop(barrier=True)
         timers.log(['load-checkpoint'])
         one_logger and one_logger.log_metrics(
@@ -1586,6 +1595,8 @@ def training_log(
     if writer and (iteration % args.tensorboard_log_interval == 0):
         if wandb_writer:
             wandb_writer.log({'samples vs steps': args.consumed_train_samples}, iteration)
+            wandb_writer.log({'tokens vs steps': args.consumed_train_samples * args.seq_length},
+                             iteration)
         writer.add_scalar('learning-rate', learning_rate, iteration)
         writer.add_scalar('learning-rate vs samples', learning_rate, args.consumed_train_samples)
         if wandb_writer:
@@ -1703,7 +1714,9 @@ def training_log(
 
         elapsed_time = timers('interval-time').elapsed(barrier=True)
         elapsed_time_per_iteration = elapsed_time / total_iterations
-
+        tokens_per_second = args.global_batch_size * args.seq_length / elapsed_time
+        tokens_per_second_per_gpu = tokens_per_second / args.world_size
+        
         throughput = num_floating_point_operations(args, batch_size) / (
             elapsed_time_per_iteration * 10**12 * args.world_size
         )
@@ -1727,6 +1740,7 @@ def training_log(
         )
         if args.log_throughput:
             log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} |'
+            log_string += f' tokens/s/GPU: {tokens_per_second_per_gpu:.0f} |'
             if args.log_timers_to_tensorboard:
                 if writer:
                     writer.add_scalar('throughput', throughput, iteration)

@@ -11,6 +11,7 @@ from megatron.core.config import is_experimental_enabled
 from megatron.core.fusions.fused_indices_converter import fused_indices_to_multihot
 from megatron.core.fusions.fused_pad_routing_map import fused_pad_routing_map
 from megatron.core.jit import jit_fuser
+import nvtx
 from megatron.core.tensor_parallel import (
     all_to_all,
     gather_from_sequence_parallel_region,
@@ -48,6 +49,7 @@ from megatron.core.transformer.transformer_config import TransformerConfig
 
 logger = logging.getLogger(__name__)
 
+NVTX_COLOR = "red"
 
 class MoETokenDispatcher:
     """
@@ -431,6 +433,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
 
         self.shared_experts = None
 
+    @nvtx.annotate(color=NVTX_COLOR)
     def preprocess(self, routing_map: torch.Tensor) -> torch.Tensor:
         """
         Preprocesses the token routing map for All-to-All communication and token permutation.
@@ -554,6 +557,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
         ), "cuda_sync_point must be after cuda_dtoh_point."
         return num_tokens_per_local_expert
 
+    @nvtx.annotate(color=NVTX_COLOR)
     def dispatch_preprocess(
         self, hidden_states: torch.Tensor, routing_map: torch.Tensor, probs: torch.Tensor
     ):
@@ -571,6 +575,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             A tuple of permuted hidden states and probabilities.
         """
         # Preprocess: Get the metadata for communication, permutation and computation operations.
+        # TODO: why save to self.xx ?
         self.hidden_shape = hidden_states.shape
         self.probs = probs
         self.routing_map = routing_map
@@ -791,6 +796,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             The final MoE layer output reshaped to its original dimensions.
         """
         if self.shared_experts is not None:
+            # TODO: why after alltoall?
             self.shared_experts.linear_fc2_forward(permutated_local_input_tokens)
             self.shared_experts.post_forward_comm()
 
@@ -824,6 +830,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
         ):
             self.cuda_sync_point = point
 
+    @nvtx.annotate(color=NVTX_COLOR)
     def _maybe_dtoh_and_synchronize(
         self, point: str, tokens_per_expert: torch.Tensor = None
     ) -> torch.Tensor:

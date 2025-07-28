@@ -33,6 +33,9 @@ from megatron.core.utils import (
 
 logger = logging.getLogger(__name__)
 
+import nvtx
+
+NVTX_COLOR= "blue"
 
 def get_transformer_layer_offset(
     config: TransformerConfig, vp_stage: Optional[int] = None, pp_rank: Optional[int] = None
@@ -278,6 +281,13 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         self.layer_number = layer_number + get_transformer_layer_offset(
             self.config, vp_stage, get_pg_rank(pg_collection.pp)
         )
+ 
+        # use layer-specific config if specified
+        if self.layer_number-1 in self.config.layer_override_args_dict:
+            # Override the layer number if it is specified in the config.
+            self.config = self.config.layer_override_args_dict[self.layer_number-1] # layer_number starts from 1
+            logger.info(
+                f"Overriding config for layer {self.layer_number} ...")
         self.hidden_dropout = config.hidden_dropout if hidden_dropout is None else hidden_dropout
 
         # [Module 1: Input Layernorm] Optional Layernorm on the input data
@@ -436,6 +446,7 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         output = self._forward_mlp(hidden_states, kwargs.get("inference_context", None))
         return output, context
 
+    @nvtx.annotate("TransformerLayer._forward_attention", color=NVTX_COLOR)
     def _forward_attention(
         self,
         hidden_states: Tensor,

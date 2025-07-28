@@ -781,6 +781,14 @@ class TransformerConfig(ModelParallelConfig):
     transformer_impl: str = "transformer_engine"
     """Transformer implementation to use.
     Options are 'transformer_engine' for Transformer Engine and 'local' for MCore."""
+    """Configuration of any quantization to be applied to the model"""
+    
+    layer_override_args_dict: Optional[dict] = None
+    """A dictionary of layer override arguments. This is used to override the default arguments so that different layers can have different specifications.
+    An example: 
+        config_for_layer_0 = config.layer_override_args_dict[0]
+    """
+
 
     def __post_init__(self):
         """Python dataclass method that is used to modify attributes after initialization.
