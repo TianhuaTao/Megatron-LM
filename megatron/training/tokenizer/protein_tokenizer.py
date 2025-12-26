@@ -1,7 +1,7 @@
 from typing import Sequence, Tuple, List, Union
 from abc import ABC
 from abc import abstractmethod
-from .tokenizer import MegatronTokenizer
+from .tokenizer import MegatronLegacyTokenizer
 import logging
 import itertools
 import json
@@ -14,7 +14,7 @@ import numpy
 
 
 
-class _ProteinTokenizer(MegatronTokenizer):
+class _ProteinTokenizer(MegatronLegacyTokenizer):
     """
     Protein Tokenizer based on Residue level tokenizer
     """

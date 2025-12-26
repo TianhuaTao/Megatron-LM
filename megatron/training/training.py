@@ -13,6 +13,7 @@ import math
 import os
 import sys
 from typing import Any, Optional
+import nvtx
 
 import torch.distributed
 
@@ -1490,7 +1491,7 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
         )
     return {}, skipped_iter, should_checkpoint, should_exit, exit_code, grad_norm, num_zeros_in_grad, log_max_attention_logit
 
-
+@nvtx.annotate("training_log")
 def training_log(
     loss_dict,
     total_loss_dict,
@@ -1592,212 +1593,215 @@ def training_log(
     # learning rate will be None on ranks without trainable params, so we must gather across mp ranks
     learning_rate = reduce_max_stat_across_model_parallel_group(learning_rate)
     # Tensorboard values.
-    if writer and (iteration % args.tensorboard_log_interval == 0):
-        if wandb_writer:
-            wandb_writer.log({'samples vs steps': args.consumed_train_samples}, iteration)
-            wandb_writer.log({'tokens vs steps': args.consumed_train_samples * args.seq_length},
-                             iteration)
-        writer.add_scalar('learning-rate', learning_rate, iteration)
-        writer.add_scalar('learning-rate vs samples', learning_rate, args.consumed_train_samples)
-        if wandb_writer:
-            wandb_writer.log({'learning-rate': learning_rate}, iteration)
-        if args.skipped_train_samples > 0:
-            writer.add_scalar('skipped-train-samples', args.skipped_train_samples, iteration)
+    with nvtx.annotate("training_log_tensorboard"):
+        if writer and (iteration % args.tensorboard_log_interval == 0):
             if wandb_writer:
-                wandb_writer.log({'skipped-train-samples': args.skipped_train_samples}, iteration)
-        writer.add_scalar('batch-size', batch_size, iteration)
-        writer.add_scalar('batch-size vs samples', batch_size, args.consumed_train_samples)
-        if wandb_writer:
-            wandb_writer.log({'batch-size': batch_size}, iteration)
-        # Log bins for packed mode
-        if has_rl_utils and args.rl_use_sequence_packing:
-            packing_metrics = rl_utils.get_sequence_packing_tensorboard_metrics(args)
-            for metric_name, metric_value in packing_metrics.items():
-                writer.add_scalar(metric_name, metric_value, iteration)
-            if wandb_writer and packing_metrics:
-                wandb_writer.log(packing_metrics, iteration)
-        for key in loss_dict:
-            writer.add_scalar(key, loss_dict[key], iteration)
-            writer.add_scalar(key + ' vs samples', loss_dict[key], args.consumed_train_samples)
+                wandb_writer.log({'samples vs steps': args.consumed_train_samples}, iteration)
+                wandb_writer.log({'tokens vs steps': args.consumed_train_samples * args.seq_length},
+                                iteration)
+            writer.add_scalar('learning-rate', learning_rate, iteration)
+            writer.add_scalar('learning-rate vs samples', learning_rate, args.consumed_train_samples)
             if wandb_writer:
-                wandb_writer.log({key: loss_dict[key]}, iteration)
-        if args.log_loss_scale_to_tensorboard:
-            writer.add_scalar('loss-scale', loss_scale, iteration)
-            writer.add_scalar('loss-scale vs samples', loss_scale, args.consumed_train_samples)
+                wandb_writer.log({'learning-rate': learning_rate}, iteration)
+            if args.skipped_train_samples > 0:
+                writer.add_scalar('skipped-train-samples', args.skipped_train_samples, iteration)
+                if wandb_writer:
+                    wandb_writer.log({'skipped-train-samples': args.skipped_train_samples}, iteration)
+            writer.add_scalar('batch-size', batch_size, iteration)
+            writer.add_scalar('batch-size vs samples', batch_size, args.consumed_train_samples)
             if wandb_writer:
-                wandb_writer.log({'loss-scale': loss_scale}, iteration)
-        if args.log_world_size_to_tensorboard:
-            writer.add_scalar('world-size', args.world_size, iteration)
-            writer.add_scalar('world-size vs samples', args.world_size, args.consumed_train_samples)
-            if wandb_writer:
-                wandb_writer.log({'world-size': args.world_size}, iteration)
-        if grad_norm is not None:
-            writer.add_scalar('grad-norm', grad_norm, iteration)
-            writer.add_scalar('grad-norm vs samples', grad_norm, args.consumed_train_samples)
-            if wandb_writer:
-                wandb_writer.log({'grad-norm': grad_norm}, iteration)
-        if num_zeros_in_grad is not None:
-            writer.add_scalar('num-zeros', num_zeros_in_grad, iteration)
-            writer.add_scalar(
-                'num-zeros vs samples', num_zeros_in_grad, args.consumed_train_samples
-            )
-            if wandb_writer:
-                wandb_writer.log({'num-zeros': num_zeros_in_grad}, iteration)
-        if params_norm is not None:
-            writer.add_scalar('params-norm', params_norm, iteration)
-            writer.add_scalar('params-norm vs samples', params_norm, args.consumed_train_samples)
-            if wandb_writer:
-                wandb_writer.log({'params-norm': params_norm}, iteration)
-        if getattr(args, 'perform_rl_step', False):
-            grpo_collection_iteration = iteration // (args.grpo_iterations * ( ( args.grpo_samples_per_iteration )// args.global_batch_size ))
-            writer.add_scalar('grpo_collection_iteration', grpo_collection_iteration, iteration)
-            if wandb_writer:
-                wandb_writer.log({'grpo_collection_iteration': grpo_collection_iteration}, iteration)
-        if args.log_memory_to_tensorboard:
-            mem_stats = torch.cuda.memory_stats()
-            writer.add_scalar(
-                "mem-reserved-bytes", mem_stats["reserved_bytes.all.current"], iteration
-            )
-            writer.add_scalar(
-                "mem-allocated-bytes", mem_stats["allocated_bytes.all.current"], iteration
-            )
-            writer.add_scalar(
-                "mem-max-allocated-bytes", mem_stats["allocated_bytes.all.peak"], iteration
-            )
-            writer.add_scalar("mem-allocated-count", mem_stats["allocation.all.current"], iteration)
-        if args.log_max_attention_logit:
-            writer.add_scalar('max_attention_logit', max_attention_logit, iteration)
-            if wandb_writer:
-                wandb_writer.log({'max_attention_logit': max_attention_logit}, iteration)
-    if args.num_experts is not None:
-        moe_loss_scale = 1 / get_num_microbatches()
-        track_names = []
-        if "aux_loss" in args.moe_router_load_balancing_type:
-            track_names.append("load_balancing_loss")
-        if "seq_aux_loss" in args.moe_router_load_balancing_type:
-            track_names.append("seq_load_balancing_loss")
-        if "global_aux_loss" in args.moe_router_load_balancing_type:
-            track_names.append("global_load_balancing_loss")
-        if args.moe_z_loss_coeff is not None:
-            track_names.append("z_loss")
+                wandb_writer.log({'batch-size': batch_size}, iteration)
+            # Log bins for packed mode
+            if has_rl_utils and args.rl_use_sequence_packing:
+                packing_metrics = rl_utils.get_sequence_packing_tensorboard_metrics(args)
+                for metric_name, metric_value in packing_metrics.items():
+                    writer.add_scalar(metric_name, metric_value, iteration)
+                if wandb_writer and packing_metrics:
+                    wandb_writer.log(packing_metrics, iteration)
+            for key in loss_dict:
+                writer.add_scalar(key, loss_dict[key], iteration)
+                writer.add_scalar(key + ' vs samples', loss_dict[key], args.consumed_train_samples)
+                if wandb_writer:
+                    wandb_writer.log({key: loss_dict[key]}, iteration)
+            if args.log_loss_scale_to_tensorboard:
+                writer.add_scalar('loss-scale', loss_scale, iteration)
+                writer.add_scalar('loss-scale vs samples', loss_scale, args.consumed_train_samples)
+                if wandb_writer:
+                    wandb_writer.log({'loss-scale': loss_scale}, iteration)
+            if args.log_world_size_to_tensorboard:
+                writer.add_scalar('world-size', args.world_size, iteration)
+                writer.add_scalar('world-size vs samples', args.world_size, args.consumed_train_samples)
+                if wandb_writer:
+                    wandb_writer.log({'world-size': args.world_size}, iteration)
+            if grad_norm is not None:
+                writer.add_scalar('grad-norm', grad_norm, iteration)
+                writer.add_scalar('grad-norm vs samples', grad_norm, args.consumed_train_samples)
+                if wandb_writer:
+                    wandb_writer.log({'grad-norm': grad_norm}, iteration)
+            if num_zeros_in_grad is not None:
+                writer.add_scalar('num-zeros', num_zeros_in_grad, iteration)
+                writer.add_scalar(
+                    'num-zeros vs samples', num_zeros_in_grad, args.consumed_train_samples
+                )
+                if wandb_writer:
+                    wandb_writer.log({'num-zeros': num_zeros_in_grad}, iteration)
+            if params_norm is not None:
+                writer.add_scalar('params-norm', params_norm, iteration)
+                writer.add_scalar('params-norm vs samples', params_norm, args.consumed_train_samples)
+                if wandb_writer:
+                    wandb_writer.log({'params-norm': params_norm}, iteration)
+            if getattr(args, 'perform_rl_step', False):
+                grpo_collection_iteration = iteration // (args.grpo_iterations * ( ( args.grpo_samples_per_iteration )// args.global_batch_size ))
+                writer.add_scalar('grpo_collection_iteration', grpo_collection_iteration, iteration)
+                if wandb_writer:
+                    wandb_writer.log({'grpo_collection_iteration': grpo_collection_iteration}, iteration)
+            if args.log_memory_to_tensorboard:
+                mem_stats = torch.cuda.memory_stats()
+                writer.add_scalar(
+                    "mem-reserved-bytes", mem_stats["reserved_bytes.all.current"], iteration
+                )
+                writer.add_scalar(
+                    "mem-allocated-bytes", mem_stats["allocated_bytes.all.current"], iteration
+                )
+                writer.add_scalar(
+                    "mem-max-allocated-bytes", mem_stats["allocated_bytes.all.peak"], iteration
+                )
+                writer.add_scalar("mem-allocated-count", mem_stats["allocation.all.current"], iteration)
+            if args.log_max_attention_logit:
+                writer.add_scalar('max_attention_logit', max_attention_logit, iteration)
+                if wandb_writer:
+                    wandb_writer.log({'max_attention_logit': max_attention_logit}, iteration)
+    with nvtx.annotate("moe logs"):
+        if args.num_experts is not None:
+            moe_loss_scale = 1 / get_num_microbatches()
+            track_names = []
+            if "aux_loss" in args.moe_router_load_balancing_type:
+                track_names.append("load_balancing_loss")
+            if "seq_aux_loss" in args.moe_router_load_balancing_type:
+                track_names.append("seq_load_balancing_loss")
+            if "global_aux_loss" in args.moe_router_load_balancing_type:
+                track_names.append("global_load_balancing_loss")
+            if args.moe_z_loss_coeff is not None:
+                track_names.append("z_loss")
 
-        if args.is_hybrid_model:
-            layers = args.hybrid_override_pattern.count('E')
-        else:
-            layers = args.num_layers
+            if args.is_hybrid_model:
+                layers = args.hybrid_override_pattern.count('E')
+            else:
+                layers = args.num_layers
 
-        track_moe_metrics(
-            loss_scale=moe_loss_scale,
-            iteration=iteration,
-            writer=writer,
-            wandb_writer=wandb_writer,
-            total_loss_dict=total_loss_dict,
-            per_layer_logging=args.moe_per_layer_logging,
-            force_initialize=True,
-            track_names=track_names,
-            num_layers=layers,
-            moe_layer_freq=args.moe_layer_freq,
-            mtp_num_layers=args.mtp_num_layers,
-        )
+            track_moe_metrics(
+                loss_scale=moe_loss_scale,
+                iteration=iteration,
+                writer=writer,
+                wandb_writer=wandb_writer,
+                total_loss_dict=total_loss_dict,
+                per_layer_logging=args.moe_per_layer_logging,
+                force_initialize=True,
+                track_names=track_names,
+                num_layers=layers,
+                moe_layer_freq=args.moe_layer_freq,
+                mtp_num_layers=args.mtp_num_layers,
+            )
     if args.mtp_num_layers is not None:
         mtp_loss_scale = 1 / get_num_microbatches()
         MTPLossLoggingHelper.track_mtp_metrics(
             mtp_loss_scale, iteration, writer, wandb_writer, total_loss_dict
         )
-    if iteration % args.log_interval == 0:
-        if args.record_memory_history and (is_last_rank() or torch.distributed.get_backend() == 'fake'):
-            snapshot = torch.cuda.memory._snapshot()
-            from pickle import dump
+    with nvtx.annotate("log_interval"):
+        if iteration % args.log_interval == 0:
+            if args.record_memory_history and (is_last_rank() or torch.distributed.get_backend() == 'fake'):
+                snapshot = torch.cuda.memory._snapshot()
+                from pickle import dump
 
-            with open(args.memory_snapshot_path, 'wb') as f:
-                dump(snapshot, f)
+                with open(args.memory_snapshot_path, 'wb') as f:
+                    dump(snapshot, f)
 
-        elapsed_time = timers('interval-time').elapsed(barrier=True)
-        elapsed_time_per_iteration = elapsed_time / total_iterations
-        tokens_per_second = args.global_batch_size * args.seq_length / elapsed_time
-        tokens_per_second_per_gpu = tokens_per_second / args.world_size
-        
-        throughput = num_floating_point_operations(args, batch_size) / (
-            elapsed_time_per_iteration * 10**12 * args.world_size
-        )
+            elapsed_time = timers('interval-time').elapsed(barrier=True)
+            elapsed_time_per_iteration = elapsed_time / total_iterations
+            tokens_per_second = args.global_batch_size * args.seq_length / elapsed_time
+            tokens_per_second_per_gpu = tokens_per_second / args.world_size
+            
+            throughput = num_floating_point_operations(args, batch_size) / (
+                elapsed_time_per_iteration * 10**12 * args.world_size
+            )
 
-        one_logger_utils.track_e2e_metrics(args.log_throughput, throughput)
+            one_logger_utils.track_e2e_metrics(args.log_throughput, throughput)
 
-        if args.log_timers_to_tensorboard:
-            if writer:
-                writer.add_scalar('iteration-time', elapsed_time_per_iteration, iteration)
-            if wandb_writer:
-                wandb_writer.log({'iteration-time': elapsed_time_per_iteration}, iteration)
-        log_string = f" [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]"
-        log_string += ' iteration {:8d}/{:8d} |'.format(iteration, args.train_iters)
-        log_string += ' consumed samples: {:12d} |'.format(args.consumed_train_samples)
-        if has_rl_utils and args.rl_use_sequence_packing:
-            log_string += rl_utils.get_sequence_packing_log_info(args)
-        if args.skipped_train_samples > 0:
-            log_string += ' skipped samples: {:12d} |'.format(args.skipped_train_samples)
-        log_string += ' elapsed time per iteration (ms): {:.1f} |'.format(
-            elapsed_time_per_iteration * 1000.0
-        )
-        if args.log_throughput:
-            log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} |'
-            log_string += f' tokens/s/GPU: {tokens_per_second_per_gpu:.0f} |'
             if args.log_timers_to_tensorboard:
                 if writer:
-                    writer.add_scalar('throughput', throughput, iteration)
+                    writer.add_scalar('iteration-time', elapsed_time_per_iteration, iteration)
                 if wandb_writer:
-                    wandb_writer.log({'throughput': throughput}, iteration)
-        if args.log_energy:
-            energy = (energy_monitor.lap() / total_iterations) / args.world_size
-            power = energy / elapsed_time_per_iteration
-            log_string += f' energy per GPU (J/iter/GPU): {energy:.1f} |'
-            log_string += f' power per GPU (W/GPU): {power:.1f} |'
-            if writer:
-                writer.add_scalar('iter-energy/gpu', energy, iteration)
-                writer.add_scalar('power/gpu', power, iteration)
-            if wandb_writer:
-                wandb_writer.log({'iter-energy/gpu': energy}, iteration)
-                wandb_writer.log({'power/gpu': power}, iteration)
-        # Decoupled_learning_rate should be not None only on first and last pipeline stage.
-        log_string += f' learning rate: {learning_rate:.6E} |'
-        log_string += f' global batch size: {batch_size:5d} |'
-        for key in total_loss_dict:
-            if key not in [advanced_iters_key, skipped_iters_key, nan_iters_key]:
-                avg = total_loss_dict[key].item() / float(
-                    max(1, total_loss_dict[advanced_iters_key])
-                )
-                if avg > 0.0:
-                    log_string += ' {}: {:.6E} |'.format(key, avg)
-                total_loss_dict[key] = torch.tensor([0.0], dtype=torch.float, device='cuda')
-        log_string += f' loss scale: {loss_scale:.1f} |'
-        if grad_norm is not None:
-            log_string += f' grad norm: {grad_norm:.3f} |'
-        if num_zeros_in_grad is not None:
-            log_string += f' num zeros: {num_zeros_in_grad} |'
-        if params_norm is not None:
-            log_string += f' params norm: {params_norm:.3f} |'
-        log_string += ' number of skipped iterations: {:3d} |'.format(
-            total_loss_dict[skipped_iters_key]
-        )
-        log_string += ' number of nan iterations: {:3d} |'.format(total_loss_dict[nan_iters_key])
-        total_loss_dict[advanced_iters_key] = 0
-        total_loss_dict[skipped_iters_key] = 0
-        total_loss_dict[nan_iters_key] = 0
-        print_rank_last(log_string)
-        if report_memory_flag:
-            # Report memory after optimizer state has been initialized.
-            if torch.distributed.get_rank() == 0:
-                num_microbatches = get_num_microbatches()
-                report_theoretical_memory(args, num_microbatches=num_microbatches, verbose=True)
-            report_memory(f'(after {iteration} iterations)')
-            if iteration > 1:
-                # Make sure the memory after the second iteration is reported to include optimizer state memory.
-                report_memory_flag = False
-        # Write timers to wandb, don't reset the counts
-        if args.log_timers_to_tensorboard:
-            timers.write(timers_to_log, writer, iteration, normalizer=args.log_interval, reset=False)
-            timers.write(timers_to_log, wandb_writer, iteration, normalizer=args.log_interval, reset=False)
-        # Log timers to stdout
-        timers.log(timers_to_log, normalizer=args.log_interval)
+                    wandb_writer.log({'iteration-time': elapsed_time_per_iteration}, iteration)
+            log_string = f" [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]"
+            log_string += ' iteration {:8d}/{:8d} |'.format(iteration, args.train_iters)
+            log_string += ' consumed samples: {:12d} |'.format(args.consumed_train_samples)
+            if has_rl_utils and args.rl_use_sequence_packing:
+                log_string += rl_utils.get_sequence_packing_log_info(args)
+            if args.skipped_train_samples > 0:
+                log_string += ' skipped samples: {:12d} |'.format(args.skipped_train_samples)
+            log_string += ' elapsed time per iteration (ms): {:.1f} |'.format(
+                elapsed_time_per_iteration * 1000.0
+            )
+            if args.log_throughput:
+                log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} |'
+                log_string += f' tokens/s/GPU: {tokens_per_second_per_gpu:.0f} |'
+                if args.log_timers_to_tensorboard:
+                    if writer:
+                        writer.add_scalar('throughput', throughput, iteration)
+                    if wandb_writer:
+                        wandb_writer.log({'throughput': throughput}, iteration)
+            if args.log_energy:
+                energy = (energy_monitor.lap() / total_iterations) / args.world_size
+                power = energy / elapsed_time_per_iteration
+                log_string += f' energy per GPU (J/iter/GPU): {energy:.1f} |'
+                log_string += f' power per GPU (W/GPU): {power:.1f} |'
+                if writer:
+                    writer.add_scalar('iter-energy/gpu', energy, iteration)
+                    writer.add_scalar('power/gpu', power, iteration)
+                if wandb_writer:
+                    wandb_writer.log({'iter-energy/gpu': energy}, iteration)
+                    wandb_writer.log({'power/gpu': power}, iteration)
+            # Decoupled_learning_rate should be not None only on first and last pipeline stage.
+            log_string += f' learning rate: {learning_rate:.6E} |'
+            log_string += f' global batch size: {batch_size:5d} |'
+            for key in total_loss_dict:
+                if key not in [advanced_iters_key, skipped_iters_key, nan_iters_key]:
+                    avg = total_loss_dict[key].item() / float(
+                        max(1, total_loss_dict[advanced_iters_key])
+                    )
+                    if avg > 0.0:
+                        log_string += ' {}: {:.6E} |'.format(key, avg)
+                    total_loss_dict[key] = torch.tensor([0.0], dtype=torch.float, device='cuda')
+            log_string += f' loss scale: {loss_scale:.1f} |'
+            if grad_norm is not None:
+                log_string += f' grad norm: {grad_norm:.3f} |'
+            if num_zeros_in_grad is not None:
+                log_string += f' num zeros: {num_zeros_in_grad} |'
+            if params_norm is not None:
+                log_string += f' params norm: {params_norm:.3f} |'
+            log_string += ' number of skipped iterations: {:3d} |'.format(
+                total_loss_dict[skipped_iters_key]
+            )
+            log_string += ' number of nan iterations: {:3d} |'.format(total_loss_dict[nan_iters_key])
+            total_loss_dict[advanced_iters_key] = 0
+            total_loss_dict[skipped_iters_key] = 0
+            total_loss_dict[nan_iters_key] = 0
+            print_rank_last(log_string)
+            if report_memory_flag:
+                # Report memory after optimizer state has been initialized.
+                if torch.distributed.get_rank() == 0:
+                    num_microbatches = get_num_microbatches()
+                    report_theoretical_memory(args, num_microbatches=num_microbatches, verbose=True)
+                report_memory(f'(after {iteration} iterations)')
+                if iteration > 1:
+                    # Make sure the memory after the second iteration is reported to include optimizer state memory.
+                    report_memory_flag = False
+            # Write timers to wandb, don't reset the counts
+            if args.log_timers_to_tensorboard:
+                timers.write(timers_to_log, writer, iteration, normalizer=args.log_interval, reset=False)
+                timers.write(timers_to_log, wandb_writer, iteration, normalizer=args.log_interval, reset=False)
+            # Log timers to stdout
+            timers.log(timers_to_log, normalizer=args.log_interval)
 
     return report_memory_flag
 

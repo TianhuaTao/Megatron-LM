@@ -1112,22 +1112,22 @@ def validate_args(args, defaults={}):
         args.attention_softmax_in_fp32 = True
 
     # parse the iteration ranges and add to args.iterations_to_skip
-    if args.iteration_ranges_to_skip is not None:
-        def parse_iteration_range(range_str):
-            """Parse a range string and return a list of iterations.
-            example: "1-3,5,7-9" -> [1, 2, 3, 5, 7, 8, 9]
-            """
-            ranges = []
-            for r in range_str.split(","):
-                if "-" in r:
-                    start, end = map(int, r.split("-"))
-                    ranges.extend(range(start, end + 1))
-                else:
-                    ranges.append(int(r))
-            return ranges
+    # if args.iteration_ranges_to_skip is not None:
+    #     def parse_iteration_range(range_str):
+    #         """Parse a range string and return a list of iterations.
+    #         example: "1-3,5,7-9" -> [1, 2, 3, 5, 7, 8, 9]
+    #         """
+    #         ranges = []
+    #         for r in range_str.split(","):
+    #             if "-" in r:
+    #                 start, end = map(int, r.split("-"))
+    #                 ranges.extend(range(start, end + 1))
+    #             else:
+    #                 ranges.append(int(r))
+    #         return ranges
         
-        parsed_iters_to_skip = parse_iteration_range(args.iteration_ranges_to_skip)
-        args.iterations_to_skip.extend(parsed_iters_to_skip)
+    #     parsed_iters_to_skip = parse_iteration_range(args.iteration_ranges_to_skip)
+    #     args.iterations_to_skip.extend(parsed_iters_to_skip)
         
 
     if args.result_rejected_tracker_filename is not None:
@@ -2183,13 +2183,13 @@ def _add_training_args(parser):
                        help='Global step to start profiling.')
     group.add_argument('--profile-step-end', type=int, default=12,
                        help='Global step to stop profiling.')
-    group.add_argument('--iterations-to-skip', nargs='+', type=int, default=[],
-                       help='List of iterations to skip, empty by default.')
-    group.add_argument('--iteration-ranges-to-skip', type=str, default=None,
-                       help='List of iteration ranges to skip, accepted format is'
-                        ' <start1>-<end1>,<start2>-<end2>,...'
-                        ' e.g. 0-10,20-30. This will skip iterations 0 to 10 and 20 to 30.'
-                       )
+    # group.add_argument('--iterations-to-skip', nargs='+', type=int, default=[],
+    #                    help='List of iterations to skip, empty by default.')
+    # group.add_argument('--iteration-ranges-to-skip', type=str, default=None,
+    #                    help='List of iteration ranges to skip, accepted format is'
+    #                     ' <start1>-<end1>,<start2>-<end2>,...'
+    #                     ' e.g. 0-10,20-30. This will skip iterations 0 to 10 and 20 to 30.'
+    #                    )
     group.add_argument('--result-rejected-tracker-filename', type=str, default=None,
                        help='Optional name of file tracking `result_rejected` events.')
     group.add_argument('--disable-gloo-process-groups', action='store_false',

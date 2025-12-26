@@ -4,6 +4,7 @@ import math
 from typing import List, Optional, Union
 
 import torch
+import nvtx
 
 from megatron.core import parallel_state
 from megatron.core.fp4_utils import get_fp4_align_size
@@ -11,8 +12,6 @@ from megatron.core.fp8_utils import get_fp8_align_size
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer.cuda_graphs import is_graph_capturing
 from megatron.core.transformer.transformer_config import TransformerConfig
-from megatron.core.process_groups_config import ModelCommProcessGroups
-from megatron.core.tensor_parallel.mappings import gather_from_sequence_parallel_region
 from megatron.core.jit import jit_fuser
 
 try:
@@ -760,14 +759,14 @@ def save_to_aux_losses_tracker(
     tracker[name]["avg_group"] = avg_group
     tracker[name]["reduce_group_has_dp"] = reduce_group_has_dp
 
-
+@nvtx.annotate(color="blue")
 def clear_aux_losses_tracker():
     """Clear the auxiliary losses."""
     tracker = get_moe_layer_wise_logging_tracker()
     for name in tracker:
         tracker[name]["values"].zero_()
 
-
+@nvtx.annotate(color="blue")
 def reduce_aux_losses_tracker_across_ranks(track_names: Optional[List[str]] = None):
     """Collect and reduce the auxiliary losses across ranks."""
     tracker = get_moe_layer_wise_logging_tracker()
@@ -797,6 +796,7 @@ def reduce_aux_losses_tracker_across_ranks(track_names: Optional[List[str]] = No
             )
 
 
+@nvtx.annotate(color="blue")
 def track_moe_metrics(
     loss_scale: float,
     iteration: int,
@@ -826,49 +826,54 @@ def track_moe_metrics(
     reduce_aux_losses_tracker_across_ranks(track_names)
 
     # Get number of MoE layers
-    if moe_layer_freq is None:
-        num_moe_layers = num_layers
-    elif isinstance(moe_layer_freq, int):
-        assert isinstance(num_layers, int)
-        moe_layer_pattern = [1 if (i % moe_layer_freq == 0) else 0 for i in range(num_layers)]
-        num_moe_layers = sum(moe_layer_pattern)
-    elif isinstance(moe_layer_freq, list):
-        num_moe_layers = sum(moe_layer_freq)
-    else:
-        raise ValueError(f"Invalid moe_layer_freq: {moe_layer_freq}")
+    with nvtx.annotate("get_num_moe_layers", color="blue"):
+        if moe_layer_freq is None:
+            num_moe_layers = num_layers
+        elif isinstance(moe_layer_freq, int):
+            assert isinstance(num_layers, int)
+            moe_layer_pattern = [1 if (i % moe_layer_freq == 0) else 0 for i in range(num_layers)]
+            num_moe_layers = sum(moe_layer_pattern)
+        elif isinstance(moe_layer_freq, list):
+            num_moe_layers = sum(moe_layer_freq)
+        else:
+            raise ValueError(f"Invalid moe_layer_freq: {moe_layer_freq}")
 
     if mtp_num_layers is not None:
         num_moe_layers += mtp_num_layers
 
     aux_losses = {k: v['values'].float() * loss_scale for k, v in tracker.items()}
-    for name, loss_list in aux_losses.items():
-        if total_loss_dict is not None:
-            if name not in total_loss_dict:
-                total_loss_dict[name] = loss_list.sum() / num_moe_layers
-            else:
-                total_loss_dict[name] += loss_list.sum() / num_moe_layers
-        if writer is not None:
-            # currently when using add_scalars,
-            # torch.utils.add_scalars makes each timer its own run, which
-            # polutes the runs list, so we just add each as a scalar
-            writer.add_scalar(name, loss_list.sum() / num_moe_layers, iteration)
-            if per_layer_logging:
-                for i, loss in enumerate(loss_list.tolist()):
-                    writer.add_scalar(f"moe/{name}_layer_{i}", loss, iteration)
+    with nvtx.annotate("log_moe_aux_losses", color="blue"):
+        for name, loss_list in aux_losses.items():
+            with nvtx.annotate(f'aux_loss_{name}'):
+                if total_loss_dict is not None:
+                    if name not in total_loss_dict:
+                        total_loss_dict[name] = loss_list.sum() / num_moe_layers
+                    else:
+                        total_loss_dict[name] += loss_list.sum() / num_moe_layers
+                if writer is not None:
+                    # currently when using add_scalars,
+                    # torch.utils.add_scalars makes each timer its own run, which
+                    # polutes the runs list, so we just add each as a scalar
+                    writer.add_scalar(name, loss_list.sum() / num_moe_layers, iteration)
+                    with nvtx.annotate(f'tf_per_layer'):
+                        if per_layer_logging:
+                            for i, loss in enumerate(loss_list.tolist()):
+                                writer.add_scalar(f"moe/{name}_layer_{i}", loss, iteration)
 
-            # W&B logging lacks support for logging multiple scalars simultaneously.
-            # As a workaround, we log each scalar individually first, then we can create
-            # a custom panel to manually group them to a single plot.
-            if wandb_writer:
-                wandb_writer.log({f"{name}": loss_list.sum() / num_moe_layers}, iteration)
-                if per_layer_logging:
-                    wandb_writer.log(
-                        {
-                            f"moe/{name}_layer_{i}": loss
-                            for i, loss in enumerate(loss_list.tolist())
-                        },
-                        iteration,
-                    )
+                    # W&B logging lacks support for logging multiple scalars simultaneously.
+                    # As a workaround, we log each scalar individually first, then we can create
+                    # a custom panel to manually group them to a single plot.
+                    if wandb_writer:
+                        wandb_writer.log({f"{name}": loss_list.sum() / num_moe_layers}, iteration)
+                        with nvtx.annotate(f'wandb_per_layer'):
+                            if per_layer_logging:
+                                wandb_writer.log(
+                                    {
+                                        f"moe/{name}_layer_{i}": loss
+                                        for i, loss in enumerate(loss_list.tolist())
+                                    },
+                                    iteration,
+                                )
 
     clear_aux_losses_tracker()
 

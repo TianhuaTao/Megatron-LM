@@ -43,6 +43,7 @@ from megatron.core.transformer.transformer_block import TransformerBlockSubmodul
 from copy import deepcopy
 from megatron.core.jit import jit_fuser
 from megatron.core.transformer.enums import AttnMaskType
+from model_provider import model_provider
 
 
 stimer = StragglerDetector()
@@ -54,6 +55,7 @@ def add_extra_override_config(config):
     layer_full_recompute = os.environ.get("LAYER_FULL_RECOMPUTE", None) # example "[1,1,0,0]+[0,0,0,0]"
     # convert to python list
     if layer_full_recompute is not None:
+        assert False, "Layer full recompute override is not supported currently."
         layer_full_recompute = eval(layer_full_recompute) # 1 means full recompute, 0 means no recompute
 
 
@@ -70,7 +72,7 @@ def add_extra_override_config(config):
     
     return config
 
-def model_provider(pre_process=True, post_process=True, vp_stage: Optional[int] = None) -> Union[GPTModel, megatron.legacy.model.GPTModel]:
+def protein_model_provider(args, pre_process, post_process, vp_stage=None, config=None, pg_collection=None) -> Union[GPTModel, megatron.legacy.model.GPTModel]:
     """Builds the model.
 
     The Protein-MoE model is a masked language model, but it takes the backbone from the GPT model. We need to chagne the causal attention to bidirectional attention. The GPT model seems to be better implemented than the BERT model, so we will use the GPT model as the backbone for the Protein-MoE model.
@@ -88,32 +90,14 @@ def model_provider(pre_process=True, post_process=True, vp_stage: Optional[int] 
     Returns:
         Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
     """
-    args = get_args()
-    use_te = args.transformer_impl == "transformer_engine"
-
-    if args.record_memory_history:
-        torch.cuda.memory._record_memory_history(True,
-            # keep 100,000 alloc/free events from before the snapshot
-            trace_alloc_max_entries=100000,
-
-            # record stack information for the trace events
-            trace_alloc_record_context=True)
-
-        def oom_observer(device, alloc, device_alloc, device_free):
-            # snapshot right after an OOM happened
-            print('saving allocated state during OOM')
-            snapshot = torch.cuda.memory._snapshot()
-            from pickle import dump
-            dump(snapshot, open(f"oom_rank-{torch.distributed.get_rank()}_{args.memory_snapshot_path}", 'wb'))
-
-        torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
     print_rank_0('building GPT model ...')
-    # Experimental loading arguments from yaml
-    if args.yaml_cfg is not None:
-        config = core_transformer_config_from_yaml(args, "language_model")
-    else:
-        config = core_transformer_config_from_args(args)
+
+    if config is None:
+        if args.yaml_cfg is not None:
+            config = core_transformer_config_from_yaml(args, "language_model")
+        else:
+            config = core_transformer_config_from_args(args)
 
     if args.use_legacy_models:
         assert False, "Protein-MoE is not implemented for the legacy GPT model"
@@ -129,40 +113,32 @@ def model_provider(pre_process=True, post_process=True, vp_stage: Optional[int] 
             assert False, "Protein-MoE is only implemented with the default spec"
             transformer_layer_spec = import_module(args.spec)
         else:
+            use_te = args.transformer_impl == "transformer_engine"
+
             if args.num_experts:
                 # TODO: attention -> bidirectional attention
                 # Define the decoder block spec
-                transformer_layer_spec = get_gpt_decoder_block_spec(config, use_transformer_engine=use_te, normalization=args.normalization, vp_stage=vp_stage)
+                transformer_layer_spec = get_gpt_decoder_block_spec(
+                    config, 
+                    use_transformer_engine=use_te, 
+                    normalization=args.normalization, 
+                    qk_l2_norm=args.qk_l2_norm,
+                    vp_stage=vp_stage
+                )
             else:
-                assert False, "Pure Dense is not tested."
-                # Define the decoder layer spec
-                # if use_te:
-                #     transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec_custom_mask(
-                #         args.num_experts, args.moe_grouped_gemm,
-                #         args.qk_layernorm, args.multi_latent_attention, args.moe_use_legacy_grouped_gemm)
-                # else:
-                #     transformer_layer_spec = get_gpt_layer_local_spec(
-                #         args.num_experts, args.moe_grouped_gemm,
-                #         args.qk_layernorm, args.multi_latent_attention, args.moe_use_legacy_grouped_gemm,
-                #         normalization=args.normalization)
+                # Define the decoder layer spec (same)
+                transformer_layer_spec = get_gpt_decoder_block_spec(
+                    config, 
+                    use_transformer_engine=use_te, 
+                    normalization=args.normalization, 
+                    qk_l2_norm=args.qk_l2_norm,
+                    vp_stage=vp_stage
+                )
         mtp_block_spec = None
         if args.mtp_num_layers is not None:
             mtp_block_spec = get_gpt_mtp_block_spec(config, transformer_layer_spec, use_transformer_engine=use_te)
 
-        build_model_context = nullcontext
-        build_model_context_args = {}
-        if args.fp8_param_gather:
-            try:
-                from transformer_engine.pytorch import fp8_model_init
 
-                build_model_context = fp8_model_init
-                build_model_context_args["enabled"] = True
-
-                # Check if fp8_model_init supports preserve_high_precision_init_val
-                if "preserve_high_precision_init_val" in inspect.signature(fp8_model_init).parameters:
-                    build_model_context_args["preserve_high_precision_init_val"] = True
-            except:
-                raise RuntimeError("--fp8-param-gather requires `fp8_model_init` from TransformerEngine, but not found.")
         print_rank_0(f"config:")
         print_rank_0(config)
         
@@ -170,24 +146,25 @@ def model_provider(pre_process=True, post_process=True, vp_stage: Optional[int] 
         for lspec in transformer_layer_spec.layer_specs:
             lspec.submodules.self_attention.params['attn_mask_type'] = AttnMaskType.no_mask
             
-        with build_model_context(**build_model_context_args):
-            model = GPTModel(
-                config=config,
-                transformer_layer_spec=transformer_layer_spec,
-                vocab_size=args.padded_vocab_size,
-                max_sequence_length=args.max_position_embeddings,
-                pre_process=pre_process,
-                post_process=post_process,
-                fp16_lm_cross_entropy=args.fp16_lm_cross_entropy,
-                parallel_output=True,
-                share_embeddings_and_output_weights=not args.untie_embeddings_and_output_weights,
-                position_embedding_type=args.position_embedding_type,
-                rotary_percent=args.rotary_percent,
-                rotary_base=args.rotary_base,
-                rope_scaling=args.use_rope_scaling,
-                mtp_block_spec=mtp_block_spec,
-                vp_stage=vp_stage,
-            )
+
+        model = GPTModel(
+            config=config,
+            transformer_layer_spec=transformer_layer_spec,
+            vocab_size=args.padded_vocab_size,
+            max_sequence_length=args.max_position_embeddings,
+            pre_process=pre_process,
+            post_process=post_process,
+            fp16_lm_cross_entropy=args.fp16_lm_cross_entropy,
+            parallel_output=True,
+            share_embeddings_and_output_weights=not args.untie_embeddings_and_output_weights,
+            position_embedding_type=args.position_embedding_type,
+            rotary_percent=args.rotary_percent,
+            rotary_base=args.rotary_base,
+            rope_scaling=args.use_rope_scaling,
+            mtp_block_spec=mtp_block_spec,
+            vp_stage=vp_stage,
+            pg_collection=pg_collection,
+        )
 
     return model
 
@@ -212,7 +189,8 @@ def get_batch(data_iterator):
         data = next(data_iterator)
     else:
         data = None
-        
+        return None, None, None, None, None
+
     batch = {
            'tokens': data["tokens"].cuda(non_blocking = True),
            'labels': data["labels"].cuda(non_blocking = True),
@@ -229,8 +207,7 @@ SPIKY_LOSS_FACTOR = 10
 
 import nvtx
 @jit_fuser
-@nvtx.annotate()
-
+@nvtx.annotate('loss_func')
 def loss_func(
     loss_mask: torch.Tensor, output_tensor: torch.Tensor, model: Optional[GPTModel] = None
 ):
@@ -397,7 +374,7 @@ if __name__ == "__main__":
 
     pretrain(
         train_valid_test_datasets_provider,
-        model_provider,
+        partial(model_provider, protein_model_provider),
         ModelType.encoder_or_decoder,
         forward_step,
         args_defaults={'tokenizer_type': 'ProteinTokenizer'},

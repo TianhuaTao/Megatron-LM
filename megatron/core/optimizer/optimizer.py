@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from itertools import chain
 from logging import getLogger
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-
+import nvtx
 import torch
 
 try:
@@ -1302,6 +1302,7 @@ class ChainedOptimizer(MegatronOptimizer):
             return num_zeros_in_grad
 
     @torch.no_grad()
+    @nvtx.annotate("ChainedOptimizer.step")
     def step(self):
         """ChainedOptimizer will step all optimizers one by one."""
         found_inf_flag = self.prepare_grads()
