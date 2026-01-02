@@ -268,7 +268,7 @@ def loss_func(
 
 
 
-def forward_step(data_iterator, model: GPTModel):
+def forward_step(data_iterator, model: GPTModel, return_schedule_plan: bool = False):
     """Forward training step.
 
     Args:
@@ -291,8 +291,17 @@ def forward_step(data_iterator, model: GPTModel):
             output_tensor = model(tokens, position_ids, attention_mask,
                                 labels=labels)
         else:
-            output_tensor = model(tokens, position_ids, attention_mask,
-                                labels=labels, loss_mask=loss_mask)
+            if return_schedule_plan:
+                assert args.overlap_moe_expert_parallel_comm, \
+                    "overlap_moe_expert_parallel_comm must be enabled to return the schedule plan"
+                schedule_plan = model.build_schedule_plan(
+                    tokens, position_ids, attention_mask, labels=labels, loss_mask=loss_mask
+                )
+                return schedule_plan, partial(loss_func, loss_mask, model=model)
+            else:
+                output_tensor = model(
+                    tokens, position_ids, attention_mask, labels=labels, loss_mask=loss_mask
+                )
 
     return output_tensor, partial(loss_func, loss_mask)
 
