@@ -283,7 +283,7 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         )
  
         # use layer-specific config if specified
-        if self.layer_number-1 in self.config.layer_override_args_dict:
+        if self.config.layer_override_args_dict is not None and (self.layer_number-1 in self.config.layer_override_args_dict):
             # Override the layer number if it is specified in the config.
             self.config = self.config.layer_override_args_dict[self.layer_number-1] # layer_number starts from 1
             logger.info(

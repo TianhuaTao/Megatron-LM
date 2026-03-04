@@ -4,6 +4,7 @@ import argparse
 import importlib
 import torch.multiprocessing as mp
 import sys
+# from megatron.training.initialize import initialize_megatron
 
 # A loader is a python file with at least two functions
 # - add_arguments - takes in a parser and adds any arguments needed
@@ -158,6 +159,14 @@ def main():
     saver_proc.start()
 
     # Run loader.
+    
+    # initialize_megatron(
+    #     extra_args_provider=None,
+    #     args_defaults=None,
+    #     get_embedding_ranks=None,
+    #     get_position_embedding_ranks=None,
+    #     store=None,
+    # )
     print("Starting loader...")
     loader.load_checkpoint(queue, args)
 

@@ -593,7 +593,7 @@ class TEGroupedMLP(MegatronModule):
             skip_bias_add=False,
             is_expert=True,
             tp_comm_buffer_name='fc1',
-            tp_group=pg_collection.expt_tp,
+            tp_group=parallel_state.get_expert_tensor_parallel_group(check_initialized=False),
         )
 
         if self.config.use_te_activation_func and not (submodules.activation_func is None):
@@ -617,17 +617,8 @@ class TEGroupedMLP(MegatronModule):
             skip_bias_add=True,
             is_expert=True,
             tp_comm_buffer_name='fc2',
-            tp_group=pg_collection.expt_tp,
+            tp_group=parallel_state.get_expert_tensor_parallel_group(),
         )
-
-        self.activation_recompute = (
-            self.config.recompute_granularity == 'selective'
-            and "moe_act" in self.config.recompute_modules
-        )
-        if self.activation_recompute and (self.config.fp8 or self.config.fp4):
-            from megatron.core.extensions.transformer_engine import set_save_original_input
-
-            set_save_original_input(self.linear_fc2)
 
         if self.config.fp8 or self.config.fp4:
             assert HAVE_TE, "FP8 and FP4 requires TE."

@@ -74,9 +74,9 @@ class MoETokenDispatcher:
         self.tp_group = pg_collection.expt_tp
         self.tp_ep_group = pg_collection.tp_ep
 
-        self.tp_size = utils.get_pg_size(self.tp_group)
-        self.tp_rank = utils.get_pg_rank(self.tp_group)
-        self.ep_size = utils.get_pg_size(self.ep_group)
+        self.tp_size = self.tp_group.size() if self.tp_group else 1
+        self.tp_rank = self.tp_group.rank() if self.tp_group else 0
+        self.ep_size = self.ep_group.size() if self.ep_group else 1
 
     @abstractmethod
     def dispatch_preprocess(
